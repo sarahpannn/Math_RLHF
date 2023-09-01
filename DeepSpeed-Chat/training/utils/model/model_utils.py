@@ -56,7 +56,9 @@ def create_hf_model(model_class,
             model_name_or_path,
             from_tf=bool(".ckpt" in model_name_or_path),
             config=model_config,
-            load_in_8bit=True,)
+            # load_in_8bit=True,
+            )
+        
     
     elif not rlhf_training:
         model = model_class.from_pretrained(
@@ -102,6 +104,12 @@ def create_critic_model(model_name_or_path,
     if is_reward:
         critic_model = create_hf_model(LlamaForClassification, model_name_or_path, tokenizer,
                                    ds_config, rlhf_training, disable_dropout, is_reward=True)
+        critic_model = RewardModel(
+            critic_model,
+            tokenizer,
+            num_padding_at_beginning=num_padding_at_beginning)
+        
+        return critic_model
     else:
         critic_model = create_hf_model(AutoModel, model_name_or_path, tokenizer,
                                    ds_config, rlhf_training, disable_dropout)

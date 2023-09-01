@@ -449,7 +449,6 @@ def main():
     # first number is how many experience-batch to generate, second number is the training batch size, which is the micro-batch size used
     exp_mini_dataset = MiniDataset(args.generation_batch_numbers,
                                    args.per_device_mini_train_batch_size)
-    # print('MINI DATASET DIMS')
     # print(args.generation_batch_numbers, args.per_device_mini_train_batch_size)
     unsup_mini_dataset = MiniDataset(args.generation_batch_numbers,
                                      args.per_device_mini_train_batch_size)
@@ -530,11 +529,12 @@ def main():
                 print_rank_0(
                     f"average reward score: {average_reward/inner_iter}",
                     args.global_rank)
-                wandb.log({
-                    "actor_loss": actor_loss_sum / inner_iter,
-                    "critic_loss": critic_loss_sum / inner_iter,
-                    "average_reward": average_reward / inner_iter,
-                } , step=step)
+                if args.local_rank == 0:
+                    wandb.log({
+                        "actor_loss": actor_loss_sum / inner_iter,
+                        "critic_loss": critic_loss_sum / inner_iter,
+                        "average_reward": average_reward / inner_iter,
+                    } , step=step)
                 print_rank_0(
                     "-------------------------------------------------------------------------------------",
                     args.global_rank)
