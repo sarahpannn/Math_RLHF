@@ -1,0 +1,5 @@
+**.log
+**.json
+**.wandb
+**/wandb/**
+**.mp4
