@@ -3,3 +3,4 @@
 **.wandb
 **/wandb/**
 **.mp4
+**/__pycache__/**

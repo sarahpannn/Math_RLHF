@@ -47,10 +47,11 @@ class DeepSpeedRLHFEngine():
         self.actor_tokenizer = actor_tokenizer
         # self.critic_tokenizer = critic_tokenizer
         
-        self.ref = self._init_ref(
-            actor_model_name_or_path=actor_model_name_or_path)
         self.reward = self._init_reward(
             critic_model_name_or_path=critic_model_name_or_path)
+        self.ref = self._init_ref(
+            actor_model_name_or_path=actor_model_name_or_path)
+        
         
         self.actor = self._init_actor(
             actor_model_name_or_path=actor_model_name_or_path)
@@ -97,7 +98,6 @@ class DeepSpeedRLHFEngine():
         # ds_config['contiguous_memory_optimization'] = True
         # ds_config['synchronize_checkpoint_boundary'] = True
         
-        print('CREATING MODEL')
 
         # Model
         actor_model = create_hf_model(
@@ -108,8 +108,7 @@ class DeepSpeedRLHFEngine():
             disable_dropout=self.args.disable_actor_dropout)
         
         # actor_model.generation_config = GenerationConfig.from_pretrained("meta-llama/Llama-2-7b-hf")
-        
-        print('LORA-ING')
+
     
         # LoRA
         if self.args.actor_lora_dim > 0:
@@ -160,8 +159,7 @@ class DeepSpeedRLHFEngine():
         if zero_stage != 3:
             # If actor is ZeRO-3 then we use it for everything, otherwise assume we have enough memory for ref model
             zero_stage = 0
-        ds_config = get_eval_ds_config(self.args.offload_reference_model,
-                                       zero_stage)
+        ds_config = get_eval_ds_config(stage=zero_stage, offload=self.args.offload_reference_model)
         ds_config[
             'train_micro_batch_size_per_gpu'] = self.args.per_device_mini_train_batch_size
         #TODO(jeff): we should probably set grad accumlation steps here as well for clarity
@@ -173,12 +171,11 @@ class DeepSpeedRLHFEngine():
 
         ref_model = create_hf_model(AutoModelForCausalLM,
                                     actor_model_name_or_path, self.actor_tokenizer,
-                                    ds_config)
+                                    ds_config, is_ref=True)
 
         ref_engine, *_ = deepspeed.initialize(model=ref_model,
                                               config=ds_config)
 
-        log_init("Ref", stime=stime)
         return ref_engine
 
     def _init_ema(self, actor_model_name_or_path):
@@ -286,8 +283,7 @@ class DeepSpeedRLHFEngine():
             # If critic is ZeRO-3 then we use it for everything, otherwise assume we have enough memory
             zero_stage = 0
 
-        ds_config = get_eval_ds_config(offload=True,
-                                       stage=zero_stage)
+        ds_config = get_eval_ds_config(offload=True, stage=zero_stage)
         ds_config[
             'train_micro_batch_size_per_gpu'] = self.args.per_device_mini_train_batch_size
         ds_config[
@@ -297,14 +293,14 @@ class DeepSpeedRLHFEngine():
         ds_config['bf16'] = {'enabled': True}
         #TODO(jeff): should not be needed, we should be able to use ds_config above
         #TODO(jeff): it means we never create the critic w. zero.init context if we are using ZeRO-3
-        ds_eval_config = get_eval_ds_config(offload=False, stage=0)
+        # ds_eval_config = get_eval_ds_config(offload=False, stage=0)
 
         # Model
         reward_model = create_critic_model(
             model_name_or_path=critic_model_name_or_path,
             tokenizer=self.actor_tokenizer,
             # tokenizer=self.critic_tokenizer, # TODO(self): should have different tokenizer than actor!!!
-            ds_config=ds_eval_config,
+            ds_config=ds_config,
             num_padding_at_beginning=self.args.num_padding_at_beginning,
             rlhf_training=True,
             is_reward=True,)

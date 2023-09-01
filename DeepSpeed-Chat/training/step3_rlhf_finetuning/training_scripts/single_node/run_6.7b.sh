@@ -10,11 +10,11 @@
 ACTOR_ZERO_STAGE="--actor_zero_stage 2"
 CRITIC_ZERO_STAGE="--critic_zero_stage 3"
 # ACTOR_MODEL_PATH="gpt2"
-ACTOR_MODEL_PATH="/mnt/shared_home/span/lets-reinforce-step-by-step/training/ONLY_MATH_SFT/four_epochs"
+ACTOR_MODEL_PATH="/ONLY_MATH_SFT/four_epochs"
 # ACTOR_MODEL_PATH="openlm-research/open_llama_3b_v2"
 # ACTOR_MODEL_PATH="meta-llama/Llama-2-7b-hf"
 # ACTOR_MODEL_PATH="AdamG012/chat-opt-1.3b-rlhf-actor-deepspeed"
-CRITIC_MODEL_PATH="/mnt/shared_home/span/lets-reinforce-step-by-step/training/model/llama-3b-ORM/hf_directory"
+CRITIC_MODEL_PATH="/llama-3b-ORM/hf_directory"
 # CRITIC_MODEL_PATH="/mnt/shared_home/span/lets-reinforce-step-by-step/training/model/llama-3b/hf_directory"
 # CRITIC_MODEL_PATH="/mnt/shared_home/span/lets-reinforce-step-by-step/training/model/deberta-v3-large-800k-6"
 
@@ -63,9 +63,9 @@ deepspeed --master_port 12346 --num_gpus 2 main.py \
    --actor_lora_module_name layers. \
    --critic_lora_dim 32 \
    --critic_lora_module_name layers. \
-   --offload_reference_model \
    --inference_tp_size 1 \
    --tp_gather_partition_size 2 \
+   --offload_reference_model \
    --enable_hybrid_engine \
    ${ACTOR_ZERO_STAGE} \
    ${CRITIC_ZERO_STAGE} \
