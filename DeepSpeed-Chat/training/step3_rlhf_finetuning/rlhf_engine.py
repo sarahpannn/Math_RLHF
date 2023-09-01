@@ -283,7 +283,7 @@ class DeepSpeedRLHFEngine():
             # If critic is ZeRO-3 then we use it for everything, otherwise assume we have enough memory
             zero_stage = 0
 
-        ds_config = get_eval_ds_config(offload=True, stage=zero_stage)
+        ds_config = get_eval_ds_config(offload=self.args.offload_reward_model, stage=zero_stage)
         ds_config[
             'train_micro_batch_size_per_gpu'] = self.args.per_device_mini_train_batch_size
         ds_config[

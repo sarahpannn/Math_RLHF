@@ -53,7 +53,7 @@ deepspeed --master_port 12346 --num_gpus 2 main.py \
    --critic_weight_decay 0.1 \
    --num_train_epochs 1 \
    --lr_scheduler_type cosine \
-   --gradient_accumulation_steps 32 \
+   --gradient_accumulation_steps 128 \
    --actor_gradient_checkpointing \
    --critic_gradient_checkpointing \
    --disable_actor_dropout \
@@ -66,6 +66,7 @@ deepspeed --master_port 12346 --num_gpus 2 main.py \
    --inference_tp_size 1 \
    --tp_gather_partition_size 2 \
    --offload_reference_model \
+   --offload_reward_model \
    --enable_hybrid_engine \
    ${ACTOR_ZERO_STAGE} \
    ${CRITIC_ZERO_STAGE} \
