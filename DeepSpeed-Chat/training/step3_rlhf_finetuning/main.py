@@ -460,6 +460,7 @@ def main():
                                                          "critic_learning_rate": args.critic_learning_rate,
                                                          "epochs": args.num_train_epochs, 
                                                          "batch_size": args.per_device_mini_train_batch_size,
+                                                         "accumulation_steps": args.gradient_accumulation_steps,
                                                          })
 
     for epoch in range(args.num_train_epochs):
