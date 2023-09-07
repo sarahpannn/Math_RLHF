@@ -19,18 +19,26 @@ Original file path: ```/mnt/shared_home/span/lets-reinforce-step-by-step/trainin
 
 New file path: ```/ONLY_MATH_SFT/four_epochs```
 
-### Reward Model
+### Outcome-supervised Reward Model (ORM)
 Original file path: ```/mnt/shared_home/span/lets-reinforce-step-by-step/training/model/llama-3b-ORM/hf_directory```
 
 New file path: ```/llama-3b-ORM/hf_directory```
+
+### Process-supervised Reward Model (PRM)
+Original file path: ```/mnt/shared_home/span/lets-reinforce-step-by-step/training/model/deberta-v3-large-800k-3```
 
 ## 3. CD into the right location
 ```bash
 cd DeepSpeed-Chat/training/step3_rlhf_finetuning
 ```
 ## 4. Run bash command
+If RLHF using ORM, run:
 ```bash
 bash training_scripts/single_node/run_6.7.sh
+```
+If RLF using PRM, run:
+```bash
+bash training_scripts/single_node/critic_reward_mismatch.sh
 ```
 
 ## 5. Adjust batch size
