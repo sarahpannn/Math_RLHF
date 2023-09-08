@@ -106,6 +106,28 @@ def parse_args():
         "Path to pretrained model or model identifier from huggingface.co/models.",
         required=True)
     parser.add_argument(
+        "--reward_model_name_or_path",
+        type=str,
+        help=
+        "Path to pretrained model or model identifier from huggingface.co/models.",
+        required=True)
+    parser.add_argument(
+        "--critic_reward_tokenizer_mismatch",
+        action='store_true',
+        help=
+        "If the critic and reward model use different tokenizers, set this to True.")
+    parser.add_argument(
+        "--prm",
+        action='store_true',
+        help=
+        "If using a process supervised reward model, set this to True.")
+    parser.add_argument(
+        "--reward_delivery_method",
+        type=int,
+        default=0,
+        help=
+        "0: dump the average at the end. 1: dump the product at the end. 2: no dump, place rewards individually")
+    parser.add_argument(
         "--num_padding_at_beginning",
         type=int,
         default=1,
@@ -247,10 +269,6 @@ def parse_args():
         action='store_true',
         help='Enable ZeRO Offload techniques for reference model')
     parser.add_argument(
-        '--offload_reward_model',
-        action='store_true',
-        help='Enable ZeRO Offload techniques for reward model')
-    parser.add_argument(
         '--actor_zero_stage',
         type=int,
         default=0,
@@ -260,6 +278,11 @@ def parse_args():
         type=int,
         default=0,
         help='ZeRO optimization stage for Critic model (and reward).')
+    parser.add_argument(
+        '--reward_zero_stage',
+        type=int,
+        default=0,
+        help='ZeRO optimization stage for Reward model (and clones).')
     parser.add_argument(
         '--actor_gradient_checkpointing',
         action='store_true',
@@ -416,31 +439,28 @@ def main():
     # create actor tokenizer based on actor model
     actor_tokenizer = load_hf_tokenizer(args.actor_model_name_or_path,
                                   fast_tokenizer=False)
-    # actor_tokenizer = load_hf_tokenizer("danielhanchen/open_llama_3b",
-    #                               fast_tokenizer=True)
-    
     actor_tokenizer.pad_token = actor_tokenizer.eos_token
     
     # make sure tokenizer is right pad in our logic
     actor_tokenizer.padding_side = 'right'
     
-    # # create critic tokenizer based on critic model
-    # critic_tokenizer = load_hf_tokenizer(args.actor_model_name_or_path,
-    #                               fast_tokenizer=True)
-    # critic_tokenizer.pad_token = critic_tokenizer.eos_token
-    # # make sure tokenizer is right pad in our logic
-    # critic_tokenizer.padding_side = 'right'
-    
+    reward_tokenizer = actor_tokenizer
+    if args.critic_reward_tokenizer_mismatch:
+        reward_tokenizer = load_hf_tokenizer(args.reward_model_name_or_path,
+                                      fast_tokenizer=True)
+        reward_tokenizer.pad_token = reward_tokenizer.eos_token
     
     prompt_train_dataloader, unsupervised_train_dataloader, num_total_iters = create_datasets(
         args=args, tokenizer=actor_tokenizer, train_phase=3, )
+
 
     # RLHF engine is responsible for creating models, loading checkpoints, ds-initialize models/optims/lr-schedulers
     rlhf_engine = DeepSpeedRLHFEngine(
         actor_model_name_or_path=args.actor_model_name_or_path,
         critic_model_name_or_path=args.critic_model_name_or_path,
+        reward_model_name_or_path=args.reward_model_name_or_path,
         actor_tokenizer=actor_tokenizer,
-        # critic_tokenizer=critic_tokenizer,
+        reward_tokenizer=reward_tokenizer,
         num_total_iters=num_total_iters,
         args=args)
 
@@ -453,6 +473,7 @@ def main():
     # first number is how many experience-batch to generate, second number is the training batch size, which is the micro-batch size used
     exp_mini_dataset = MiniDataset(args.generation_batch_numbers,
                                    args.per_device_mini_train_batch_size)
+    # print('MINI DATASET DIMS')
     # print(args.generation_batch_numbers, args.per_device_mini_train_batch_size)
     unsup_mini_dataset = MiniDataset(args.generation_batch_numbers,
                                      args.per_device_mini_train_batch_size)
@@ -464,7 +485,6 @@ def main():
                                                          "critic_learning_rate": args.critic_learning_rate,
                                                          "epochs": args.num_train_epochs, 
                                                          "batch_size": args.per_device_mini_train_batch_size,
-                                                         "accumulation_steps": args.gradient_accumulation_steps,
                                                          })
 
     for epoch in range(args.num_train_epochs):
@@ -493,6 +513,7 @@ def main():
             out = trainer.generate_experience(batch_prompt['prompt'],
                                               batch_prompt['prompt_att_mask'],
                                               step)
+            
             exp_dataset = exp_mini_dataset.add(out)
             
             # print('main exp dataset: ', exp_dataset)
@@ -534,12 +555,11 @@ def main():
                 print_rank_0(
                     f"average reward score: {average_reward/inner_iter}",
                     args.global_rank)
-                if args.local_rank == 0:
-                    wandb.log({
-                        "actor_loss": actor_loss_sum / inner_iter,
-                        "critic_loss": critic_loss_sum / inner_iter,
-                        "average_reward": average_reward / inner_iter,
-                    } , step=step)
+                wandb.log({
+                    "actor_loss": actor_loss_sum / inner_iter,
+                    "critic_loss": critic_loss_sum / inner_iter,
+                    "average_reward": average_reward / inner_iter,
+                } , step=step)
                 print_rank_0(
                     "-------------------------------------------------------------------------------------",
                     args.global_rank)
