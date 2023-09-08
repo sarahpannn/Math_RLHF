@@ -53,7 +53,7 @@ class DeepSpeedPPOTrainer():
         self.ref_model = self.rlhf_engine.ref
         self.reward_model = self.rlhf_engine.reward
         self.actor_tokenizer = self.rlhf_engine.actor_tokenizer
-        # self.critic_tokenizer = self.rlhf_engine.critic_tokenizer
+        self.reward_tokenizer = self.rlhf_engine.reward_tokenizer
         self.args = args
         self.max_answer_seq_len = args.max_answer_seq_len
         self.end_of_conversation_token_id = self.actor_tokenizer(
@@ -120,15 +120,19 @@ class DeepSpeedPPOTrainer():
         return out_seq
     
     def _split_lines(self, text):
-        step_pattern = re.compile(r'Step \d+\..*?(?=(?:\n|\Z))', re.DOTALL)
-        steps = step_pattern.findall(text)
+        pattern = r'Step \d+:'
+        steps = re.split(pattern, text, re.DOTALL)
         return steps
 
     def _add_cls(self, list_of_text):
         ret_str = ''
-        for s in list_of_text:
-            ret_str += "\n"
-            # ret_str += f"{s} </s> \n"
+        for i, s in enumerate(list_of_text):
+            if i == 0:
+                ret_str += f"{s}"
+            if i > 0:
+                if s[-1] == "\n":
+                    s = s[:-1]
+                ret_str += f"Step {i}: {s} [CLS] \n"
         return ret_str
 
     def batched_preprocess(self, text):
@@ -145,26 +149,21 @@ class DeepSpeedPPOTrainer():
             text[i] = prompt + text[i]
         cls_idxs = []
         tokenized = tokenizer(text, padding='max_length', truncation=True, max_length=768, return_tensors='pt')
-        # for j in range(len(text)):
-        #     cls_idxs_j = []
-        #     for i in range(1, len(tokenized['input_ids'][j])):
-        #         if tokenized['input_ids'][j][i] == 2 and tokenized['input_ids'][j][i - 1] != 2:
-        #             cls_idxs_j.append(i)
-        #     cls_idxs.append(cls_idxs_j)
+        # print(tokenized['input_ids'])
+        # print(tokenizer.batch_decode(tokenized['input_ids'], ignore_special_tokens=False))
+        for j in range(len(tokenized['input_ids'])):
+            cls_idxs_j = []
+            for i in range(1, len(tokenized['input_ids'][j])):
+                if tokenized['input_ids'][j][i] == tokenizer.cls_token_id:
+                    cls_idxs_j.append(i)
+            cls_idxs.append(cls_idxs_j)
             
-        #     prediction_mask_j = [0] * len(tokenized['input_ids'][j])
-        #     for k in range(len(tokenized['input_ids'][j])):
-        #         if k in cls_idxs:
-        #             prediction_mask_j[k] = 1
-        #     prediction_mask.append(prediction_mask_j)
-          
-        for j in range(len(text)):
-            for i in reversed(range(1, len(tokenized['input_ids'][j]))):
-                prediction_mask_j = [0] * len(tokenized['input_ids'][j])  
-                if tokenized['input_ids'][j][i] != 2:
-                    prediction_mask_j[i] = 1
-                    break
+            prediction_mask_j = [0] * len(tokenized['input_ids'][j])
+            for k in range(len(tokenized['input_ids'][j])):
+                if k in cls_idxs_j:
+                    prediction_mask_j[k] = 1
             prediction_mask.append(prediction_mask_j)
+        
                 
         return tokenized, cls_idxs, prediction_mask
     
@@ -176,55 +175,50 @@ class DeepSpeedPPOTrainer():
                     action_mask[i][j] = 1
                     break
         return action_mask
+    
+    def translate(self, prompts, in_text, tokenizer1, tokenizer2):
+        raw_text = tokenizer1.batch_decode(in_text)
+        preprocessed_text = self.batched_preprocess(raw_text)
+        decoded_prompts = tokenizer1.batch_decode(prompts)
+        tokenized_text, cls_idxs, prediction_mask = self.tokenize_raw(prompts=decoded_prompts, 
+                                                                      text=preprocessed_text, 
+                                                                      tokenizer=tokenizer2)
+        return tokenized_text, cls_idxs, prediction_mask
 
     def generate_experience(self, prompts, mask, step):
         self.eval()
         seq = self._generate_sequence(prompts, mask, step)
         self.train()
         
-        action_mask = self.get_last_token(seq)
-
         pad_token_id = self.actor_tokenizer.pad_token_id
         attention_mask = seq.not_equal(pad_token_id).long()
         with torch.no_grad():
             output = self.actor_model(seq, attention_mask=attention_mask)
             output_ref = self.ref_model(seq, attention_mask=attention_mask)
-            reward_score = self.reward_model.forward_value(
-                seq, attention_mask, prediction_mask=action_mask,
-                prompt_length=self.prompt_length).detach(
-                )
-            print('REWARD_SCORE: ', reward_score)
+            if not self.args.critic_reward_tokenizer_mismatch:
+                action_mask = self.get_last_token(seq)
+                reward_score = self.reward_model.forward_value(
+                    seq, attention_mask, prediction_mask=action_mask,
+                    prompt_length=self.prompt_length).detach()
+                    
+                values = self.critic_model.forward_value(
+                seq, attention_mask, return_value_only=True).detach()[:, :-1]
                 
-            values = self.critic_model.forward_value(
-            seq, attention_mask, return_value_only=True).detach()[:, :-1]
+            else:
+                translated_tokens, cls_idxs, prediction_mask = self.translate(prompts=prompts, in_text=seq, tokenizer1=self.actor_tokenizer, tokenizer2=self.reward_tokenizer)
+                print("CLS IDXS: ", cls_idxs)
+                seq_device = seq.device
+                reward_score = self.reward_model.forward_value(
+                    translated_tokens['input_ids'].to(seq_device), translated_tokens['attention_mask'].to(seq_device),
+                    prediction_mask=prediction_mask).detach()
 
-
-        logits = output.logits
-        logits_ref = output_ref.logits
-            
-            # decoded_output = self.actor_tokenizer.batch_decode(seq, skip_special_tokens=True)
-            # decoded_prompt = self.actor_tokenizer.batch_decode(prompts, skip_special_tokens=True)
-
-            # decoded_prompt_lengths = [len(string) for string in decoded_prompt]
-        
-            # # critic_prompt_len = len(self.critic_tokenizer(decoded_prompt)['input_ids'])
-            # decoded_actor_responses = [decoded_output[i][j:] for i, j in enumerate(decoded_prompt_lengths)]
-            
-            # preprocessed_actor_responses = self.batched_preprocess(decoded_actor_responses)
-            # tokenized_actor_responses, cls_idxs, prediction_mask = self.tokenize_raw(decoded_prompt, preprocessed_actor_responses, self.actor_tokenizer)
-            
-            # print('CLS_IDXS: ', cls_idxs)
-            
-
-            # values = self.critic_model.forward_value(
-            #     seq, attention_mask.to(seq_device), prompt_length=critic_prompt_len, return_value_only=True).detach()[:, :-1]
-            
-            # reward_score = self.reward_model.forward_value(
-            #     seq, attention_mask,
-            #     prompt_length=self.prompt_length, cls_idx=cls_idxs).detach()
-            
-        
-            
+                print(reward_score)
+                
+                values = self.critic_model.forward_value(
+                    seq, attention_mask, return_value_only=True).detach()[:, :-1]
+                
+            logits = output.logits
+            logits_ref = output_ref.logits
 
         return {
             'prompts': prompts,
@@ -247,8 +241,10 @@ class DeepSpeedPPOTrainer():
             reward_score = reward_score.to(torch.float32)
             reward_clip = torch.clamp(reward_score, -self.clip_reward_value,
                                     self.clip_reward_value)
+            print("REWARD CLIP: ", reward_clip)
             batch_size = log_probs.shape[0]
             for j in range(batch_size):
+                print('REWARDS: ', rewards[j, start:ends[j]][-1])
                 rewards[j, start:ends[j]][-1] += reward_clip[j]
 
             return rewards
@@ -277,6 +273,15 @@ class DeepSpeedPPOTrainer():
         values = inputs['value']
         attention_mask = inputs['attention_mask']
         seq = inputs['input_ids']
+        
+        # print('prompts shape: ',  prompts.shape)
+        # print('log_probs shape: ',  log_probs.shape)
+        # print('ref_log_probs shape: ',  ref_log_probs.shape)
+        # print('reward_score shape: ',  reward_score.shape)
+        # print('values shape: ',  values.shape)
+        # print('attention_mask shape: ',  attention_mask.shape)
+        # print('seq shape: ',  seq.shape)
+        
 
         start = prompts.size()[-1] - 1
         action_mask = attention_mask[:, 1:]
