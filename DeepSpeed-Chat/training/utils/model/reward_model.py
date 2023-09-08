@@ -115,6 +115,7 @@ class RewardModel(nn.Module):
         }
         
     def get_reward(self, transformer_outputs, prediction_mask, prod=False, avg=False):
+        scores_list = []
         logits = transformer_outputs[0] #TODO(self): make this work for larger batch sizes
         prediction_mask = torch.tensor(prediction_mask).to(logits.device) # [bs, seq_len]
         
@@ -122,18 +123,23 @@ class RewardModel(nn.Module):
         regularized_relevant_indices = torch.nn.functional.softmax(logits_of_interest, dim=1)
         scores = regularized_relevant_indices[:, 0]
         
-        print("logits size: ", logits.shape)
-        print(prediction_mask)
+        # print("logits size: ", logits.shape)
+        # print(prediction_mask)
         
         if prod:
             scores = regularized_relevant_indices[:, 1]
-            scores = torch.prod(scores)
-        
+            scores = torch.prod(scores)    
+                
         if avg:
             scores = regularized_relevant_indices[:, 1]
             scores = torch.mean(scores)
             
-        return scores
+        if torch.isnan(scores):
+            scores = torch.tensor(0.0)
+            
+        scores_list.append(scores)
+            
+        return torch.tensor(scores_list)
 
     def forward_value(self,
                       input_ids=None,
