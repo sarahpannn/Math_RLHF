@@ -27,13 +27,16 @@ def create_hf_model(model_class,
                     rlhf_training=False,
                     disable_dropout=False,
                     is_reward=False,
-                    is_ref=False):
+                    is_ref=False,):
     # model_config = AutoConfig.from_pretrained(model_name_or_path)
     model_config = OpenLlamaConfig.from_pretrained(model_name_or_path)
     model_config.shared_input_output_embedding = False
     model_config.use_memory_efficient_attention = False
     model_config.use_stable_embedding = False
     model_config.output_hidden_states=True
+    # print('WHEN INIT MODEL, NAME IS ', model_name_or_path)
+    if 'deberta' in model_name_or_path:
+        model_config = AutoConfig.from_pretrained(model_name_or_path)
     if disable_dropout:
         model_config.dropout = 0.0
     # Note: dschf is defined in function scope to avoid global effects
@@ -56,9 +59,7 @@ def create_hf_model(model_class,
             model_name_or_path,
             from_tf=bool(".ckpt" in model_name_or_path),
             config=model_config,
-            # load_in_8bit=True,
-            )
-        
+            load_in_8bit=True,)
     
     elif not rlhf_training:
         model = model_class.from_pretrained(
@@ -97,28 +98,26 @@ def create_critic_model(model_name_or_path,
                         num_padding_at_beginning=0,
                         rlhf_training=False,
                         disable_dropout=False,
-                        is_reward=False):
+                        is_reward=False,
+                        args=None):
     # OPT model family always put a padding token at the beginning of the sequence,
     # we did not see this in other models but not sure if it is a general rule
     
-    if is_reward:
+    if "llama" in model_name_or_path and is_reward:
         critic_model = create_hf_model(LlamaForClassification, model_name_or_path, tokenizer,
                                    ds_config, rlhf_training, disable_dropout, is_reward=True)
-        critic_model = RewardModel(
-            critic_model,
-            tokenizer,
-            num_padding_at_beginning=num_padding_at_beginning)
-        
-        return critic_model
+    elif "llama" in model_name_or_path and rlhf_training:
+        critic_model = create_hf_model(LlamaForClassification, model_name_or_path, tokenizer,
+                                      ds_config, rlhf_training, disable_dropout)
     else:
-        critic_model = create_hf_model(AutoModel, model_name_or_path, tokenizer,
+        critic_model = create_hf_model(AutoModelForTokenClassification, model_name_or_path, tokenizer,
                                    ds_config, rlhf_training, disable_dropout)
-    
 
     critic_model = RewardModel(
         critic_model,
         tokenizer,
-        num_padding_at_beginning=num_padding_at_beginning)
+        num_padding_at_beginning=num_padding_at_beginning,
+        args=args)
 
     if rlhf_training:
         if not os.path.isdir(model_name_or_path):

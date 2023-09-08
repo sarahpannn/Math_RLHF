@@ -11,8 +11,9 @@ from utils.utils import to_device
 ## https://github.com/CarperAI/trlx/blob/main/examples/summarize_rlhf/reward_model/reward_model.py
 class RewardModel(nn.Module):
 
-    def __init__(self, base_model, tokenizer, num_padding_at_beginning=0):
+    def __init__(self, base_model, tokenizer, num_padding_at_beginning=0, args=None):
         super().__init__()
+        self.args=args
         self.config = base_model.config
         self.num_padding_at_beginning = num_padding_at_beginning
         if hasattr(self.config, "word_embed_proj_dim"):
@@ -112,6 +113,27 @@ class RewardModel(nn.Module):
             "chosen_mean_scores": chosen_mean_scores,
             "rejected_mean_scores": rejected_mean_scores,
         }
+        
+    def get_reward(self, transformer_outputs, prediction_mask, prod=False, avg=False):
+        logits = transformer_outputs[0] #TODO(self): make this work for larger batch sizes
+        prediction_mask = torch.tensor(prediction_mask).to(logits.device) # [bs, seq_len]
+        
+        logits_of_interest = logits[prediction_mask == 1]
+        regularized_relevant_indices = torch.nn.functional.softmax(logits_of_interest, dim=1)
+        scores = regularized_relevant_indices[:, 0]
+        
+        print("logits size: ", logits.shape)
+        print(prediction_mask)
+        
+        if prod:
+            scores = regularized_relevant_indices[:, 1]
+            scores = torch.prod(scores)
+        
+        if avg:
+            scores = regularized_relevant_indices[:, 1]
+            scores = torch.mean(scores)
+            
+        return scores
 
     def forward_value(self,
                       input_ids=None,
@@ -138,15 +160,18 @@ class RewardModel(nn.Module):
             values = self.v_head(hidden_states[-1]).squeeze(-1)
             return values
         
-        logits = transformer_outputs[0] # [bs, seq_len, 2]
-        # print(input_ids)
-        prediction_mask = torch.tensor(prediction_mask).to(logits.device) # [bs, seq_len]
+        if not self.args.prm:
+            return self.get_reward(transformer_outputs, prediction_mask)
         
-        logits_of_interest = logits[prediction_mask == 1]
-        regularized_relevant_indices = torch.nn.functional.softmax(logits_of_interest, dim=1)
-        scores = regularized_relevant_indices[:, 0]
+        if self.args.reward_delivery_method == 0:
+            return self.get_reward(transformer_outputs, prediction_mask, avg=True)
         
-        return scores
+        if self.args.reward_delivery_method == 1:
+            return self.get_reward(transformer_outputs, prediction_mask, prod=True)
+        
+        if self.args.reward_delivery_method == 2:
+            return self.get_reward(transformer_outputs, prediction_mask)
+        
         # scores = torch.prod(regularized_relevant_indices[:, 1], dim=1)
         
         # logits = transformer_outputs[0] # [bs, seq_len, 3]
