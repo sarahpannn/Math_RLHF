@@ -41,17 +41,16 @@ def log_init(model_name, stime=None):
 class DeepSpeedRLHFEngine():
 
     def __init__(self, actor_model_name_or_path, critic_model_name_or_path,
-                 actor_tokenizer, args, num_total_iters):
+                 reward_model_name_or_path, actor_tokenizer, args, num_total_iters, reward_tokenizer=None,):
         self.args = args
         self.num_total_iters = num_total_iters
         self.actor_tokenizer = actor_tokenizer
-        # self.critic_tokenizer = critic_tokenizer
+        self.reward_tokenizer = reward_tokenizer
         
-        self.reward = self._init_reward(
-            critic_model_name_or_path=critic_model_name_or_path)
         self.ref = self._init_ref(
             actor_model_name_or_path=actor_model_name_or_path)
-        
+        self.reward = self._init_reward(
+            reward_model_name_or_path=reward_model_name_or_path)
         
         self.actor = self._init_actor(
             actor_model_name_or_path=actor_model_name_or_path)
@@ -91,13 +90,6 @@ class DeepSpeedRLHFEngine():
             ) * self.args.gradient_accumulation_steps_actor
         ds_config['fp16']['enabled'] = False
         ds_config['bf16'] = {'enabled': True}
-        
-        # ds_config['deepspeed_activation_checkpointing'] = True
-        # ds_config['partition_activations'] = True
-        # ds_config['contiguous_gradients'] = True
-        # ds_config['contiguous_memory_optimization'] = True
-        # ds_config['synchronize_checkpoint_boundary'] = True
-        
 
         # Model
         actor_model = create_hf_model(
@@ -105,11 +97,8 @@ class DeepSpeedRLHFEngine():
             model_name_or_path=actor_model_name_or_path,
             tokenizer=self.actor_tokenizer,
             ds_config=ds_config,
-            disable_dropout=self.args.disable_actor_dropout)
-        
-        # actor_model.generation_config = GenerationConfig.from_pretrained("meta-llama/Llama-2-7b-hf")
-
-    
+            disable_dropout=self.args.disable_actor_dropout,)
+            
         # LoRA
         if self.args.actor_lora_dim > 0:
             actor_model = convert_linear_layer_to_lora(
@@ -117,8 +106,6 @@ class DeepSpeedRLHFEngine():
                 self.args.actor_lora_dim)
             if self.args.only_optimize_lora:
                 actor_model = only_optimize_lora_parameters(actor_model)
-
-        print('INITIALIZING OPTIMIZER')
 
         # Optimizer
         AdamOptimizer = DeepSpeedCPUAdam if self.args.offload else FusedAdam
@@ -136,9 +123,6 @@ class DeepSpeedRLHFEngine():
             num_warmup_steps=self.args.num_warmup_steps,
             num_training_steps=self.num_total_iters,
         )
-        
-        
-        print('INITIALIZING DEEPSPEED')
         
         # DeepSpeed Engine
         #TODO: move enable_hybrid_engine and pin_parameters to ds_config
@@ -159,7 +143,8 @@ class DeepSpeedRLHFEngine():
         if zero_stage != 3:
             # If actor is ZeRO-3 then we use it for everything, otherwise assume we have enough memory for ref model
             zero_stage = 0
-        ds_config = get_eval_ds_config(stage=zero_stage, offload=self.args.offload_reference_model)
+        ds_config = get_eval_ds_config(self.args.offload_reference_model,
+                                       zero_stage)
         ds_config[
             'train_micro_batch_size_per_gpu'] = self.args.per_device_mini_train_batch_size
         #TODO(jeff): we should probably set grad accumlation steps here as well for clarity
@@ -168,15 +153,17 @@ class DeepSpeedRLHFEngine():
             ) * self.args.gradient_accumulation_steps_actor
         ds_config['fp16']['enabled'] = False
         ds_config['bf16'] = {'enabled': True}
-
+        
         ref_model = create_hf_model(AutoModelForCausalLM,
                                     actor_model_name_or_path, self.actor_tokenizer,
-                                    ds_config, is_ref=True)
+                                    ds_config,)
 
         ref_engine, *_ = deepspeed.initialize(model=ref_model,
                                               config=ds_config)
 
+        log_init("Ref", stime=stime)
         return ref_engine
+
 
     def _init_ema(self, actor_model_name_or_path):
         stime = log_init("EMA")
@@ -196,7 +183,7 @@ class DeepSpeedRLHFEngine():
 
         actor_model_ema = create_hf_model(AutoModelForCausalLM,
                                           actor_model_name_or_path,
-                                          self.actor_tokenizer, ds_config)
+                                          self.actor_tokenizer, ds_config,)
         if self.args.actor_lora_dim > 0:
             actor_model_ema = convert_linear_layer_to_lora(
                 actor_model_ema, self.args.actor_lora_module_name,
@@ -207,6 +194,7 @@ class DeepSpeedRLHFEngine():
 
         log_init("EMA", stime=stime)
         return ema_engine
+
 
     def _init_critic(self, critic_model_name_or_path):
         stime = log_init("Critic")
@@ -234,7 +222,6 @@ class DeepSpeedRLHFEngine():
         critic_model = create_critic_model(
             model_name_or_path=critic_model_name_or_path,
             tokenizer=self.actor_tokenizer,
-            # tokenizer=self.critic_tokenizer,
             ds_config=ds_config,
             num_padding_at_beginning=self.args.num_padding_at_beginning,
             rlhf_training=True,
@@ -275,15 +262,17 @@ class DeepSpeedRLHFEngine():
         log_init("Critic", stime=stime)
         return critic_engine
 
-    def _init_reward(self, critic_model_name_or_path):
+
+    def _init_reward(self, reward_model_name_or_path):
         stime = log_init("Reward")
         # DS Config
-        zero_stage = self.args.critic_zero_stage
+        zero_stage = self.args.reward_zero_stage
         if zero_stage != 3:
             # If critic is ZeRO-3 then we use it for everything, otherwise assume we have enough memory
             zero_stage = 0
 
-        ds_config = get_eval_ds_config(offload=self.args.offload_reward_model, stage=zero_stage)
+        ds_config = get_eval_ds_config(offload=True,
+                                       stage=zero_stage)
         ds_config[
             'train_micro_batch_size_per_gpu'] = self.args.per_device_mini_train_batch_size
         ds_config[
@@ -293,17 +282,20 @@ class DeepSpeedRLHFEngine():
         ds_config['bf16'] = {'enabled': True}
         #TODO(jeff): should not be needed, we should be able to use ds_config above
         #TODO(jeff): it means we never create the critic w. zero.init context if we are using ZeRO-3
-        # ds_eval_config = get_eval_ds_config(offload=False, stage=0)
+        ds_eval_config = get_eval_ds_config(offload=False, stage=0)
 
+        if self.reward_tokenizer is None:
+            self.reward_tokenizer = self.actor_tokenizer
+        
         # Model
         reward_model = create_critic_model(
-            model_name_or_path=critic_model_name_or_path,
-            tokenizer=self.actor_tokenizer,
-            # tokenizer=self.critic_tokenizer, # TODO(self): should have different tokenizer than actor!!!
-            ds_config=ds_config,
+            model_name_or_path=reward_model_name_or_path,
+            tokenizer=self.reward_tokenizer,
+            ds_config=ds_eval_config,
             num_padding_at_beginning=self.args.num_padding_at_beginning,
             rlhf_training=True,
-            is_reward=True,)
+            is_reward=True,
+            args=self.args)
 
         reward_engine, *_ = deepspeed.initialize(model=reward_model,
                                                  config=ds_config)
