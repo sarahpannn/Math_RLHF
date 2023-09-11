@@ -4,6 +4,10 @@
 
 This guide will walk you through the process of setting up this repository, including cloning it, copying model checkpoints to specific folders, navigating to the correct location, and running a Bash command.
 
+## 0. Download Dependencies
+
+Please ensure that transformers version is 4.30.2 before proceeding.
+
 ## 1. Clone the Repository
 
 To get started, clone this repository to your local machine using the following command:
