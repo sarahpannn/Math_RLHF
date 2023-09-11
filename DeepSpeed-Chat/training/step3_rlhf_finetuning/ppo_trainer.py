@@ -77,7 +77,7 @@ class DeepSpeedPPOTrainer():
                 input_ids=prompts,
                 attention_mask=mask,
                 max_new_tokens=self.max_answer_seq_len,
-                max_length=max_min_length,
+                # max_length=max_min_length,
                 pad_token_id=self.actor_tokenizer.pad_token_id,
                 synced_gpus=True,
             )
@@ -140,13 +140,17 @@ class DeepSpeedPPOTrainer():
         for example in text:
             split = self._split_lines(example)
             clsed = self._add_cls(split)
+            # print("IN BATCHED_PREPROCESS: ", clsed)
             ret_list.append(clsed)
         return ret_list
 
     def tokenize_raw(self, prompts, text, tokenizer):
         prediction_mask = []
-        for i, prompt in enumerate(prompts):
-            text[i] = prompt + text[i]
+        # for i, prompt in enumerate(prompts):
+        #     print('prompt: ', prompt)
+        #     print('text: ', text[i])
+        #     text[i] = prompt + text[i]
+        # print("IN TOKENIZE_RAW: ", text)
         cls_idxs = []
         tokenized = tokenizer(text, padding='max_length', truncation=True, max_length=768, return_tensors='pt')
         # print(tokenized['input_ids'])
@@ -205,12 +209,18 @@ class DeepSpeedPPOTrainer():
                 seq, attention_mask, return_value_only=True).detach()[:, :-1]
                 
             else:
+                print("ACTOR OUTPUT SEQ:", seq)
                 translated_tokens, cls_idxs, prediction_mask = self.translate(prompts=prompts, in_text=seq, tokenizer1=self.actor_tokenizer, tokenizer2=self.reward_tokenizer)
-                print("CLS IDXS: ", cls_idxs)
+                # print('ATTENTION MASK: ', translated_tokens['attention_mask'].sum())
                 seq_device = seq.device
-                reward_score = self.reward_model.forward_value(
-                    translated_tokens['input_ids'].to(seq_device), translated_tokens['attention_mask'].to(seq_device),
-                    prediction_mask=prediction_mask).detach()
+                if self.args.reward_delivery_method < 2:
+                    reward_score = self.reward_model.forward_value(
+                        translated_tokens['input_ids'].to(seq_device), translated_tokens['attention_mask'].to(seq_device),
+                        prediction_mask=prediction_mask).detach()
+                else:
+                    reward_score = self.reward_model.forward_value(
+                        translated_tokens['input_ids'].to(seq_device), translated_tokens['attention_mask'].to(seq_device),
+                        prediction_mask=prediction_mask)
 
                 print(reward_score)
                 
@@ -227,7 +237,8 @@ class DeepSpeedPPOTrainer():
             'value': values,
             'rewards': reward_score,
             'input_ids': seq,
-            "attention_mask": attention_mask
+            "attention_mask": attention_mask,
+            "cls_idxs": cls_idxs
         }
 
     def compute_rewards(self, prompts, log_probs, ref_log_probs, reward_score,
@@ -241,25 +252,33 @@ class DeepSpeedPPOTrainer():
             reward_score = reward_score.to(torch.float32)
             reward_clip = torch.clamp(reward_score, -self.clip_reward_value,
                                     self.clip_reward_value)
-            print("REWARD CLIP: ", reward_clip)
+            # print("REWARD CLIP: ", reward_clip)
             batch_size = log_probs.shape[0]
             for j in range(batch_size):
-                print('REWARDS: ', rewards[j, start:ends[j]][-1])
+                # print('REWARDS: ', rewards[j, start:ends[j]][-1])
                 rewards[j, start:ends[j]][-1] += reward_clip[j]
 
             return rewards
         
         if not dump:
+            print('LOG PROBS SHAPE: ', log_probs.shape)
             kl_divergence_estimate = -self.kl_ctl * (log_probs - ref_log_probs)
             rewards = kl_divergence_estimate
             start = prompts.shape[1] - 1
             ends = start + action_mask[:, start:].sum(1) + 1
-            reward_score = reward_score.to(torch.float32)
-            reward_clip = torch.clamp(reward_score, -self.clip_reward_value,
-                                    self.clip_reward_value)
-            batch_size = log_probs.shape[0]
-            for j in range(batch_size):
-                rewards[j, start:ends[j]][-1] += reward_clip[j]
+            
+            for i, reward_i in enumerate(reward_score):
+                prompt_len = prompts.shape[1]
+                cls_idxs[i] = [x - prompt_len for x in cls_idxs[i]]
+                # print('REWARD I: ', reward_i)
+                print('CLS IDX: ', cls_idxs[i])
+                reward_i = torch.tensor(reward_i)
+                clamped_rewards = torch.clamp(reward_i, -self.clip_reward_value, self.clip_reward_value)
+                
+                # print('CLAMPED REWARDS: ', clamped_rewards)
+                print('ORIGINAL REWARD SHAPE: ', rewards[i, start:ends[i]].shape)
+                # print('ORIGINAL REWARDS: ', rewards[i, start:ends[i]][torch.tensor(cls_idxs[i])])
+                rewards[i, start:ends[i]][torch.tensor(cls_idxs[i])] += clamped_rewards
 
             return rewards
 
@@ -273,6 +292,7 @@ class DeepSpeedPPOTrainer():
         values = inputs['value']
         attention_mask = inputs['attention_mask']
         seq = inputs['input_ids']
+        cls_idxs = inputs['cls_idxs']
         
         # print('prompts shape: ',  prompts.shape)
         # print('log_probs shape: ',  log_probs.shape)
@@ -288,9 +308,14 @@ class DeepSpeedPPOTrainer():
 
         old_values = values
         with torch.no_grad():
-            old_rewards = self.compute_rewards(prompts, log_probs,
-                                               ref_log_probs, reward_score,
-                                               action_mask)
+            if self.args.reward_delivery_method < 2:
+                old_rewards = self.compute_rewards(prompts, log_probs,
+                                                ref_log_probs, reward_score,
+                                                action_mask)
+            else:
+                old_rewards = self.compute_rewards(prompts, log_probs,
+                                                ref_log_probs, reward_score,
+                                                action_mask, dump=False, cls_idxs=cls_idxs)
             ends = start + action_mask[:, start:].sum(1) + 1
             # we need to zero out the reward and value after the end of the conversation
             # otherwise the advantage/return will be wrong

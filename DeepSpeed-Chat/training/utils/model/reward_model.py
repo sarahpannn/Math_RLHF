@@ -114,30 +114,30 @@ class RewardModel(nn.Module):
             "rejected_mean_scores": rejected_mean_scores,
         }
         
-    def get_reward(self, transformer_outputs, prediction_mask, prod=False, avg=False):
+    def get_reward(self, transformer_outputs, prediction_mask, prod=False, avg=False, prm=False):
         scores_list = []
-        logits = transformer_outputs[0] #TODO(self): make this work for larger batch sizes
-        prediction_mask = torch.tensor(prediction_mask).to(logits.device) # [bs, seq_len]
-        
-        logits_of_interest = logits[prediction_mask == 1]
-        regularized_relevant_indices = torch.nn.functional.softmax(logits_of_interest, dim=1)
-        scores = regularized_relevant_indices[:, 0]
-        
-        # print("logits size: ", logits.shape)
-        # print(prediction_mask)
-        
-        if prod:
-            scores = regularized_relevant_indices[:, 1]
-            scores = torch.prod(scores)    
+        for logits in transformer_outputs:
+            prediction_mask = torch.tensor(prediction_mask).to(logits.device) # [bs, seq_len]
+            
+            logits_of_interest = logits[prediction_mask == 1]
+            regularized_relevant_indices = torch.nn.functional.softmax(logits_of_interest, dim=1)
+            scores = regularized_relevant_indices[:, 0]
+            
+            if prm:
+                return scores
+            
+            if prod:
+                scores = regularized_relevant_indices[:, 1]
+                scores = torch.prod(scores)    
+                    
+            if avg:
+                scores = regularized_relevant_indices[:, 1]
+                scores = torch.mean(scores)
                 
-        if avg:
-            scores = regularized_relevant_indices[:, 1]
-            scores = torch.mean(scores)
+            if torch.isnan(scores).any():
+                scores = torch.tensor(0.0)
             
-        if torch.isnan(scores):
-            scores = torch.tensor(0.0)
-            
-        scores_list.append(scores)
+            scores_list.append(scores)
             
         return torch.tensor(scores_list)
 

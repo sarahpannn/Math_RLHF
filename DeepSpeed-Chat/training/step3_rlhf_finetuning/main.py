@@ -454,6 +454,8 @@ def main():
                                       fast_tokenizer=True)
         reward_tokenizer.pad_token = reward_tokenizer.eos_token
     
+    print('creating dataset')
+    
     prompt_train_dataloader, unsupervised_train_dataloader, num_total_iters = create_datasets(
         args=args, tokenizer=actor_tokenizer, train_phase=3, )
 
@@ -536,7 +538,12 @@ def main():
                         actor_loss, critic_loss = trainer.train_rlhf(exp_data)
                         actor_loss_sum += actor_loss.item()
                         critic_loss_sum += critic_loss.item()
-                        average_reward += exp_data["rewards"].mean()
+                        if type(exp_data['rewards']) == torch.Tensor:
+                            average_reward += exp_data["rewards"].mean()
+                        else:
+                            for reward in exp_data["rewards"]:
+                                average_reward += reward.mean()
+                            average_reward /= len(exp_data["rewards"])
 
                         if unsupervised_training_enabled:
                             unsup_loss = trainer.train_unsupervised(

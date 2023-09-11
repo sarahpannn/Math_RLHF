@@ -282,7 +282,7 @@ class DeepSpeedRLHFEngine():
         ds_config['bf16'] = {'enabled': True}
         #TODO(jeff): should not be needed, we should be able to use ds_config above
         #TODO(jeff): it means we never create the critic w. zero.init context if we are using ZeRO-3
-        ds_eval_config = get_eval_ds_config(offload=False, stage=0)
+        # ds_eval_config = get_eval_ds_config(offload=True, stage=0)
 
         if self.reward_tokenizer is None:
             self.reward_tokenizer = self.actor_tokenizer
@@ -291,7 +291,7 @@ class DeepSpeedRLHFEngine():
         reward_model = create_critic_model(
             model_name_or_path=reward_model_name_or_path,
             tokenizer=self.reward_tokenizer,
-            ds_config=ds_eval_config,
+            ds_config=ds_config,
             num_padding_at_beginning=self.args.num_padding_at_beginning,
             rlhf_training=True,
             is_reward=True,
