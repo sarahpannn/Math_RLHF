@@ -36,11 +36,18 @@ If RLHF using ORM, run:
 ```bash
 bash training_scripts/single_node/run_6.7.sh
 ```
-If RLF using PRM, run:
+If RLHF using PRM delivery method avg, run:
 ```bash
 bash training_scripts/single_node/critic_reward_mismatch.sh
 ```
-
+If RLHF using PRM delivery method product, run:
+```bash
+bash training_scripts/single_node/critic_reward_mismatch.sh
+```
+If RLHF using PRM delivery method fine-grained, run:
+```bash
+bash training_scripts/single_node/real_prm.sh
+```
 ## 5. Adjust batch size
 
 I'm not sure how much RAM the A100's will have, but if it's more than 24 gb like Inanna, I assume increasing the per_device_batch_size will maximize usage. 
