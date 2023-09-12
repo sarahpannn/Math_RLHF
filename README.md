@@ -4,9 +4,10 @@
 
 This guide will walk you through the process of setting up this repository, including cloning it, copying model checkpoints to specific folders, navigating to the correct location, and running a Bash command.
 
-## 0. Download Dependencies
+## 0. Important Prerequisites
 
-Please ensure that transformers version is 4.30.2 before proceeding.
+a. Please ensure that transformers version is 4.30.2 before proceeding.
+b. In the file paths used, please include the keyword "llama" in the path name if the model is of llama class.
 
 ## 1. Clone the Repository
 
