@@ -39,19 +39,19 @@ cd DeepSpeed-Chat/training/step3_rlhf_finetuning
 ## 4. Run bash command
 If RLHF using ORM, run:
 ```bash
-bash training_scripts/single_node/run_6.7.sh
+bash training_scripts/single_node/ORM/ORM_dump.sh
 ```
 If RLHF using PRM delivery method avg, run:
 ```bash
-bash training_scripts/single_node/critic_reward_mismatch.sh
+bash training_scripts/single_node/PRM/PRM_avg_dump.sh
 ```
 If RLHF using PRM delivery method product, run:
 ```bash
-bash training_scripts/single_node/critic_reward_mismatch.sh
+bash training_scripts/single_node/PRM/PRM_prod_dump.sh
 ```
 If RLHF using PRM delivery method fine-grained, run:
 ```bash
-bash training_scripts/single_node/real_prm.sh
+bash training_scripts/single_node/PRM/real_prm.sh
 ```
 ## 5. Adjust batch size
 

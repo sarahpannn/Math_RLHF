@@ -43,7 +43,7 @@ deepspeed --master_port 12346 --num_gpus 2 main.py \
    --critic_model_name_or_path $CRITIC_MODEL_PATH \
    --reward_model_name_or_path $REWARD_MODEL_PATH \
    --prm \
-   --reward_delivery_method 1 \
+   --reward_delivery_method 0 \
    --num_padding_at_beginning 1 \
    --per_device_train_batch_size 1 \
    --per_device_mini_train_batch_size 1 \
