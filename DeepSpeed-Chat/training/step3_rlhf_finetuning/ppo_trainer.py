@@ -84,7 +84,7 @@ class DeepSpeedPPOTrainer():
             )
             
             print('just generated')
-            print(seq)
+            # print(seq)
             
         # with torch.no_grad():
         #     seq = self.actor_model.generate(
@@ -169,7 +169,7 @@ class DeepSpeedPPOTrainer():
         if self.args.reward_delivery_method == 2:
             actor_prediction_mask = []
             actor_tokenized = self.actor_tokenizer(actor_clsed, return_tensors='pt')
-            print("actor_tokenized: ", actor_tokenized['input_ids'])
+            # print("actor_tokenized: ", actor_tokenized['input_ids'])
             for j in range(len(actor_tokenized['input_ids'])):
                 cls_idxs_j = []
                 # print("LEN OF INPUT IDS: ", len(actor_tokenized['input_ids'][j]) - 1)
@@ -325,18 +325,18 @@ class DeepSpeedPPOTrainer():
             for i, reward_i in enumerate(reward_score):
                 # print('PROMPTS: ', prompts[i])
                 # print('PROMPT LEN: ', start)
-                print('CLS IDX BEFORE: ', cls_idxs[i])
+                # print('CLS IDX BEFORE: ', cls_idxs[i])
                 cls_idxs[i] = [x - (start + 2) for x in cls_idxs[i]]
                 if cls_idxs[i][-1] >= rewards[i, start:ends[i]].shape[0]:
                     cls_idxs[i][-1] = cls_idxs[i][-1] - 1
                 # print('REWARD I: ', reward_i)
-                print('CLS IDX AFTER : ', cls_idxs[i])
+                # print('CLS IDX AFTER : ', cls_idxs[i])
                 reward_i = torch.tensor(reward_i)
                 clamped_rewards = torch.clamp(reward_i, -self.clip_reward_value, self.clip_reward_value).to(rewards.device)
                 
                 # print('CLAMPED REWARDS: ', clamped_rewards)
                 # print('ORIGINAL REWARDS: ', rewards[i, start:ends[i]][torch.tensor(cls_idxs[i])])
-                print('REWARDS SIZE: ', rewards[i, start:ends[i]].shape)
+                # print('REWARDS SIZE: ', rewards[i, start:ends[i]].shape)
                 rewards[i, start:ends[i]][torch.tensor(cls_idxs[i])] += clamped_rewards
 
             return rewards
