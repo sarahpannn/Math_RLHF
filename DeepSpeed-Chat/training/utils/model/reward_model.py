@@ -114,32 +114,36 @@ class RewardModel(nn.Module):
             "rejected_mean_scores": rejected_mean_scores,
         }
         
-    def get_reward(self, transformer_outputs, prediction_mask, prod=False, avg=False, prm=False):
+    def get_reward(self, transformer_outputs, prediction_mask, prod=False, avg=False):
         scores_list = []
-        for logits in transformer_outputs:
-            prediction_mask = torch.tensor(prediction_mask).to(logits.device) # [bs, seq_len]
-            
-            logits_of_interest = logits[prediction_mask == 1]
-            regularized_relevant_indices = torch.nn.functional.softmax(logits_of_interest, dim=1)
-            scores = regularized_relevant_indices[:, 0]
-            
-            if prm:
-                return scores
-            
-            if prod:
-                scores = regularized_relevant_indices[:, 1]
-                scores = torch.prod(scores)    
-                    
-            if avg:
-                scores = regularized_relevant_indices[:, 1]
-                scores = torch.mean(scores)
+        logits = transformer_outputs[0] #TODO(self): make this work for larger batch sizes
+        prediction_mask = torch.tensor(prediction_mask).to(logits.device) # [bs, seq_len]
+        
+        logits_of_interest = logits[prediction_mask == 1]
+        regularized_relevant_indices = torch.nn.functional.softmax(logits_of_interest, dim=1)
+        scores = regularized_relevant_indices[:, 0]
+        
+        # print("logits size: ", logits.shape)
+        # print(prediction_mask)
+        
+        if prod:
+            scores = regularized_relevant_indices[:, 1]
+            scores = torch.prod(scores)    
                 
-            if torch.isnan(scores).any():
-                scores = torch.tensor(0.0)
+        if avg:
+            scores = regularized_relevant_indices[:, 1]
+            scores = torch.mean(scores)
             
-            scores_list.append(scores)
+        # if torch.isnan(scores).any():
+        #     scores = torch.tensor(0.0)
             
-        return torch.tensor(scores_list)
+        scores_list.append(scores)
+        
+        if prod or avg:
+            return torch.tensor(scores_list)
+                    
+        return scores_list
+        
 
     def forward_value(self,
                       input_ids=None,

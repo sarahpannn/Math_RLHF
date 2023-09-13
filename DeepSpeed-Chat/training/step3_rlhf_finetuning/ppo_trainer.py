@@ -77,10 +77,14 @@ class DeepSpeedPPOTrainer():
                 input_ids=prompts,
                 attention_mask=mask,
                 max_new_tokens=self.max_answer_seq_len,
+                min_new_tokens=100,
                 # max_length=max_min_length,
                 pad_token_id=self.actor_tokenizer.pad_token_id,
                 synced_gpus=True,
             )
+            
+            print('just generated')
+            print(seq)
             
         # with torch.no_grad():
         #     seq = self.actor_model.generate(
@@ -110,11 +114,11 @@ class DeepSpeedPPOTrainer():
 
         out_seq = []
         for i in range(batch_size):
-            # if valid_ans_len[
-            #         i] <= 1:  # if the answer is shorter than 1 token, drop it
-            #     continue
-            # else:
-            out_seq.append(seq[i:i + 1])
+            if valid_ans_len[
+                    i] <= 1:  # if the answer is shorter than 1 token, drop it
+                continue
+            else:
+                out_seq.append(seq[i:i + 1])
         out_seq = torch.cat(out_seq, dim=0)  # concate output in the batch dim
 
         return out_seq
@@ -125,40 +129,69 @@ class DeepSpeedPPOTrainer():
         return steps
 
     def _add_cls(self, list_of_text):
-        ret_str = ''
+        rew_ret_str, act_ret_str = '', ''
         for i, s in enumerate(list_of_text):
+            if len(s) == 0:
+                continue
             if i == 0:
-                ret_str += f"{s}"
+                rew_ret_str += f"{s}"
+                act_ret_str += f"{s}"
             if i > 0:
                 if s[-1] == "\n":
                     s = s[:-1]
-                ret_str += f"Step {i}: {s} [CLS] \n"
-        return ret_str
+                if s[-len(self.actor_tokenizer.eos_token):] == self.actor_tokenizer.eos_token:
+                    s = s[:-len(self.actor_tokenizer.eos_token)]
+                rew_ret_str += f"Step {i}:{s}{self.reward_tokenizer.cls_token}\n"
+                act_ret_str += f"Step {i}:{s}{self.actor_tokenizer.eos_token}\n"
+        return rew_ret_str, act_ret_str
 
     def batched_preprocess(self, text):
-        ret_list = []
-        for example in text:
-            split = self._split_lines(example)
-            clsed = self._add_cls(split)
-            # print("IN BATCHED_PREPROCESS: ", clsed)
-            ret_list.append(clsed)
-        return ret_list
+        if self.args.reward_delivery_method == 2:
+            rew_ret_list, act_ret_list = [], []
+            for example in text:
+                split = self._split_lines(example)
+                rew_clsed, act_clsed = self._add_cls(split)
+                # print("IN BATCHED_PREPROCESS: ", act_clsed)
+                rew_ret_list.append(rew_clsed)
+                act_ret_list.append(act_clsed)
+            return rew_ret_list, act_ret_list
+        else:
+            rew_ret_list = []
+            for example in text:
+                split = self._split_lines(example)
+                clsed, _ = self._add_cls(split)
+                # print("IN BATCHED_PREPROCESS: ", clsed)
+                rew_ret_list.append(clsed)
+            return rew_ret_list
 
-    def tokenize_raw(self, prompts, text, tokenizer):
+    def tokenize_raw(self, prompts, text, actor_clsed=[]): 
+        actor_cls_idxs = []
+        if self.args.reward_delivery_method == 2:
+            actor_prediction_mask = []
+            actor_tokenized = self.actor_tokenizer(actor_clsed, return_tensors='pt')
+            print("actor_tokenized: ", actor_tokenized['input_ids'])
+            for j in range(len(actor_tokenized['input_ids'])):
+                cls_idxs_j = []
+                # print("LEN OF INPUT IDS: ", len(actor_tokenized['input_ids'][j]) - 1)
+                for i in range(1, len(actor_tokenized['input_ids'][j]) - 1):
+                    if actor_tokenized['input_ids'][j][i] == self.actor_tokenizer.eos_token_id and actor_tokenized['input_ids'][j][i + 1] not in [self.actor_tokenizer.eos_token_id, self.actor_tokenizer.bos_token_id]:
+                        cls_idxs_j.append(i - (2 * len(cls_idxs_j)) - 1)
+                        # print("i: ", i)
+                actor_cls_idxs.append(cls_idxs_j)
+                
+                prediction_mask_j = [0] * len(actor_tokenized['input_ids'][j])
+                for k in range(len(actor_tokenized['input_ids'][j])):
+                    if k in cls_idxs_j:
+                        prediction_mask_j[k] = 1
+                actor_prediction_mask.append(prediction_mask_j)
+                
         prediction_mask = []
-        # for i, prompt in enumerate(prompts):
-        #     print('prompt: ', prompt)
-        #     print('text: ', text[i])
-        #     text[i] = prompt + text[i]
-        # print("IN TOKENIZE_RAW: ", text)
         cls_idxs = []
-        tokenized = tokenizer(text, padding='max_length', truncation=True, max_length=768, return_tensors='pt')
-        # print(tokenized['input_ids'])
-        # print(tokenizer.batch_decode(tokenized['input_ids'], ignore_special_tokens=False))
+        tokenized = self.reward_tokenizer(text, return_tensors='pt')
         for j in range(len(tokenized['input_ids'])):
             cls_idxs_j = []
             for i in range(1, len(tokenized['input_ids'][j])):
-                if tokenized['input_ids'][j][i] == tokenizer.cls_token_id:
+                if tokenized['input_ids'][j][i] == self.reward_tokenizer.cls_token_id:
                     cls_idxs_j.append(i)
             cls_idxs.append(cls_idxs_j)
             
@@ -168,26 +201,36 @@ class DeepSpeedPPOTrainer():
                     prediction_mask_j[k] = 1
             prediction_mask.append(prediction_mask_j)
         
-                
+        if self.args.reward_delivery_method == 2:
+            return tokenized, cls_idxs, prediction_mask, actor_cls_idxs
+        
         return tokenized, cls_idxs, prediction_mask
     
     def get_last_token(self, generated_sequence):
         action_mask = torch.zeros_like(generated_sequence)
         for i in range(generated_sequence.shape[0]):
             for j in reversed(range(generated_sequence.shape[1])):
-                if generated_sequence[i][j] != 2:
+                if generated_sequence[i][j] != self.reward_tokenizer.pad_token_id:
                     action_mask[i][j] = 1
                     break
         return action_mask
     
     def translate(self, prompts, in_text, tokenizer1, tokenizer2):
         raw_text = tokenizer1.batch_decode(in_text)
-        preprocessed_text = self.batched_preprocess(raw_text)
         decoded_prompts = tokenizer1.batch_decode(prompts)
-        tokenized_text, cls_idxs, prediction_mask = self.tokenize_raw(prompts=decoded_prompts, 
-                                                                      text=preprocessed_text, 
-                                                                      tokenizer=tokenizer2)
-        return tokenized_text, cls_idxs, prediction_mask
+        if self.args.reward_delivery_method == 2:
+            reward_preprocessed, actor_preprocessed = self.batched_preprocess(raw_text)
+            tokenized_text, cls_idxs, prediction_mask, actor_cls = self.tokenize_raw(prompts=decoded_prompts,
+                                                                      text=reward_preprocessed, 
+                                                                    #   tokenizer=tokenizer2,
+                                                                      actor_clsed=actor_preprocessed)
+            return tokenized_text, cls_idxs, prediction_mask, actor_cls
+        else:
+            preprocessed_text = self.batched_preprocess(raw_text)
+            tokenized_text, cls_idxs, prediction_mask = self.tokenize_raw(prompts=decoded_prompts, 
+                                                                      text=preprocessed_text,)
+        
+            return tokenized_text, cls_idxs, prediction_mask
 
     def generate_experience(self, prompts, mask, step):
         self.eval()
@@ -209,18 +252,18 @@ class DeepSpeedPPOTrainer():
                 seq, attention_mask, return_value_only=True).detach()[:, :-1]
                 
             else:
-                print("ACTOR OUTPUT SEQ:", seq)
-                translated_tokens, cls_idxs, prediction_mask = self.translate(prompts=prompts, in_text=seq, tokenizer1=self.actor_tokenizer, tokenizer2=self.reward_tokenizer)
-                # print('ATTENTION MASK: ', translated_tokens['attention_mask'].sum())
                 seq_device = seq.device
-                if self.args.reward_delivery_method < 2:
-                    reward_score = self.reward_model.forward_value(
-                        translated_tokens['input_ids'].to(seq_device), translated_tokens['attention_mask'].to(seq_device),
-                        prediction_mask=prediction_mask).detach()
-                else:
+                if self.args.reward_delivery_method == 2:
+                    translated_tokens, cls_idxs, prediction_mask, actor_cls = self.translate(prompts=prompts, in_text=seq, tokenizer1=self.actor_tokenizer, tokenizer2=self.reward_tokenizer)
                     reward_score = self.reward_model.forward_value(
                         translated_tokens['input_ids'].to(seq_device), translated_tokens['attention_mask'].to(seq_device),
                         prediction_mask=prediction_mask)
+                else:
+                    translated_tokens, cls_idxs, prediction_mask = self.translate(prompts=prompts, in_text=seq, tokenizer1=self.actor_tokenizer, tokenizer2=self.reward_tokenizer)
+                    reward_score = self.reward_model.forward_value(
+                        translated_tokens['input_ids'].to(seq_device), translated_tokens['attention_mask'].to(seq_device),
+                        prediction_mask=prediction_mask).detach()
+                # print('ATTENTION MASK: ', translated_tokens['attention_mask'].sum())
 
                 print(reward_score)
                 
@@ -229,8 +272,9 @@ class DeepSpeedPPOTrainer():
                 
             logits = output.logits
             logits_ref = output_ref.logits
-
-        return {
+            
+        if self.args.reward_delivery_method == 2:
+            return {
             'prompts': prompts,
             'logprobs': gather_log_probs(logits[:, :-1, :], seq[:, 1:]),
             'ref_logprobs': gather_log_probs(logits_ref[:, :-1, :], seq[:, 1:]),
@@ -238,8 +282,20 @@ class DeepSpeedPPOTrainer():
             'rewards': reward_score,
             'input_ids': seq,
             "attention_mask": attention_mask,
-            "cls_idxs": cls_idxs
+            "cls_idxs": cls_idxs,
+            "actor_cls_idxs": actor_cls
         }
+        else:
+            return {
+                'prompts': prompts,
+                'logprobs': gather_log_probs(logits[:, :-1, :], seq[:, 1:]),
+                'ref_logprobs': gather_log_probs(logits_ref[:, :-1, :], seq[:, 1:]),
+                'value': values,
+                'rewards': reward_score,
+                'input_ids': seq,
+                "attention_mask": attention_mask,
+                "cls_idxs": cls_idxs
+            }
 
     def compute_rewards(self, prompts, log_probs, ref_log_probs, reward_score,
                         action_mask, dump=True, cls_idxs=[]):
@@ -261,23 +317,26 @@ class DeepSpeedPPOTrainer():
             return rewards
         
         if not dump:
-            print('LOG PROBS SHAPE: ', log_probs.shape)
             kl_divergence_estimate = -self.kl_ctl * (log_probs - ref_log_probs)
             rewards = kl_divergence_estimate
             start = prompts.shape[1] - 1
             ends = start + action_mask[:, start:].sum(1) + 1
             
             for i, reward_i in enumerate(reward_score):
-                prompt_len = prompts.shape[1]
-                cls_idxs[i] = [x - prompt_len for x in cls_idxs[i]]
+                # print('PROMPTS: ', prompts[i])
+                # print('PROMPT LEN: ', start)
+                print('CLS IDX BEFORE: ', cls_idxs[i])
+                cls_idxs[i] = [x - (start + 2) for x in cls_idxs[i]]
+                if cls_idxs[i][-1] >= rewards[i, start:ends[i]].shape[0]:
+                    cls_idxs[i][-1] = cls_idxs[i][-1] - 1
                 # print('REWARD I: ', reward_i)
-                print('CLS IDX: ', cls_idxs[i])
+                print('CLS IDX AFTER : ', cls_idxs[i])
                 reward_i = torch.tensor(reward_i)
-                clamped_rewards = torch.clamp(reward_i, -self.clip_reward_value, self.clip_reward_value)
+                clamped_rewards = torch.clamp(reward_i, -self.clip_reward_value, self.clip_reward_value).to(rewards.device)
                 
                 # print('CLAMPED REWARDS: ', clamped_rewards)
-                print('ORIGINAL REWARD SHAPE: ', rewards[i, start:ends[i]].shape)
                 # print('ORIGINAL REWARDS: ', rewards[i, start:ends[i]][torch.tensor(cls_idxs[i])])
+                print('REWARDS SIZE: ', rewards[i, start:ends[i]].shape)
                 rewards[i, start:ends[i]][torch.tensor(cls_idxs[i])] += clamped_rewards
 
             return rewards
@@ -293,6 +352,7 @@ class DeepSpeedPPOTrainer():
         attention_mask = inputs['attention_mask']
         seq = inputs['input_ids']
         cls_idxs = inputs['cls_idxs']
+        actor_cls_idxs = inputs['actor_cls_idxs']
         
         # print('prompts shape: ',  prompts.shape)
         # print('log_probs shape: ',  log_probs.shape)
@@ -315,7 +375,7 @@ class DeepSpeedPPOTrainer():
             else:
                 old_rewards = self.compute_rewards(prompts, log_probs,
                                                 ref_log_probs, reward_score,
-                                                action_mask, dump=False, cls_idxs=cls_idxs)
+                                                action_mask, dump=False, cls_idxs=actor_cls_idxs)
             ends = start + action_mask[:, start:].sum(1) + 1
             # we need to zero out the reward and value after the end of the conversation
             # otherwise the advantage/return will be wrong

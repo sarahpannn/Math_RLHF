@@ -517,8 +517,8 @@ def main():
 
             # out = trainer.generate_experience(new_batch, step) 
             out = trainer.generate_experience(batch_prompt['prompt'],
-                                              batch_prompt['prompt_att_mask'],
-                                              step)
+                                            batch_prompt['prompt_att_mask'],
+                                            step)
             
             exp_dataset = exp_mini_dataset.add(out)
             
@@ -553,8 +553,8 @@ def main():
                         inner_iter += 1
                         if args.enable_ema:
                             moving_average(rlhf_engine.actor,
-                                           rlhf_engine.actor_ema,
-                                           zero_stage=args.actor_zero_stage)
+                                        rlhf_engine.actor_ema,
+                                        zero_stage=args.actor_zero_stage)
 
                     random.shuffle(exp_dataset)
                     random.shuffle(unsup_dataset)
@@ -577,24 +577,24 @@ def main():
                 if args.enable_tensorboard and torch.distributed.get_rank(
                 ) == 0:
                     writer.add_scalar('reward',
-                                      average_reward / inner_iter,
-                                      global_step=step)
+                                    average_reward / inner_iter,
+                                    global_step=step)
                     writer.add_scalar('actor_loss',
-                                      actor_loss,
-                                      global_step=step)
+                                    actor_loss,
+                                    global_step=step)
                     writer.add_scalar('actor_loss_sum',
-                                      actor_loss_sum,
-                                      global_step=step)
+                                    actor_loss_sum,
+                                    global_step=step)
                     writer.add_scalar('critic_loss',
-                                      critic_loss,
-                                      global_step=step)
+                                    critic_loss,
+                                    global_step=step)
                     writer.add_scalar('critic_loss_sum',
-                                      critic_loss_sum,
-                                      global_step=step)
+                                    critic_loss_sum,
+                                    global_step=step)
                     writer.flush()
 
-            if args.actor_gradient_checkpointing:
-                rlhf_engine.actor.gradient_checkpointing_disable()
+                if args.actor_gradient_checkpointing:
+                    rlhf_engine.actor.gradient_checkpointing_disable()
 
     if args.output_dir is not None:
         print_rank_0('saving model ...')

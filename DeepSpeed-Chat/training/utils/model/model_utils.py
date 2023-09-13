@@ -49,7 +49,7 @@ def create_hf_model(model_class,
     if rlhf_training and not is_reward:
         model = model_class.from_config(model_config)
     
-    if is_reward:
+    elif is_reward:
         # the weight loading is handled by create critic model
         model = model_class(model_config)
         # model = model_class.from_config(model_config)
@@ -59,7 +59,7 @@ def create_hf_model(model_class,
             model_name_or_path,
             from_tf=bool(".ckpt" in model_name_or_path),
             config=model_config,
-            load_in_8bit=True,)
+            )
     
     elif not rlhf_training:
         model = model_class.from_pretrained(
@@ -106,8 +106,9 @@ def create_critic_model(model_name_or_path,
     if "llama" in model_name_or_path and is_reward:
         critic_model = create_hf_model(LlamaForClassification, model_name_or_path, tokenizer,
                                    ds_config, rlhf_training, disable_dropout, is_reward=True)
+        
     elif "llama" in model_name_or_path and rlhf_training:
-        critic_model = create_hf_model(LlamaForClassification, model_name_or_path, tokenizer,
+        critic_model = create_hf_model(AutoModel, model_name_or_path, tokenizer,
                                       ds_config, rlhf_training, disable_dropout)
     else:
         critic_model = create_hf_model(AutoModelForTokenClassification, model_name_or_path, tokenizer,
